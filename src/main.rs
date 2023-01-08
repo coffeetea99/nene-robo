@@ -1,11 +1,22 @@
-use std::env;
+use std::{env, thread, io::{BufReader, BufRead}, sync::mpsc};
 use dotenv::dotenv;
+use serde::Deserialize;
 use reqwest::{
     blocking::Client,
     header,
 };
 
 const STREAM_RULE_TAG: &str = "official_account_tweets";
+
+#[derive(Deserialize)]
+struct TweetData {
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct Tweet {
+    data: TweetData,
+}
 
 fn main() {
     dotenv().ok();
@@ -35,6 +46,30 @@ fn main() {
         None => {
             add_rule(&client);
         },
+    }
+
+    let (tweet_tx, tweet_rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let tweet_stream_response = client
+            .get("https://api.twitter.com/2/tweets/search/stream")
+            .header(header::AUTHORIZATION, &format!("Bearer {}", app_access_token))
+            .send()
+            .unwrap();
+
+        let tweet_stream_reader = BufReader::new(tweet_stream_response);
+        for tweet_object_result in tweet_stream_reader.lines() {
+            let tweet_object_string = tweet_object_result.unwrap();
+            if tweet_object_string == "" {
+                continue;
+            }
+            let tweet_object: Tweet = serde_json::from_str(&tweet_object_string).unwrap();
+            tweet_tx.send(tweet_object.data.text).unwrap();
+        }
+    });
+
+    for tweet_text in tweet_rx {
+        println!("{}", tweet_text);
     }
 }
 
