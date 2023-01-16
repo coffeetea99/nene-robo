@@ -1,8 +1,9 @@
-use std::{env, thread, io::{BufReader, BufRead}, sync::mpsc};
+use std::{env, str};
 use dotenv::dotenv;
+use tokio;
 use serde::Deserialize;
 use reqwest::{
-    blocking::Client,
+    Client,
     header,
 };
 use regex::Regex;
@@ -32,7 +33,8 @@ fn day_kanji_to_hangul(kanji: &str) -> &'static str {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     dotenv().ok();
 
     let client = Client::new();
@@ -42,8 +44,9 @@ fn main() {
         .get("https://api.twitter.com/2/tweets/search/stream/rules")
         .header(header::AUTHORIZATION, &format!("Bearer {}", app_access_token))
         .send()
+        .await
         .unwrap();
-    let get_rule_response_body: serde_json::Value = get_rule_response.json().unwrap();
+    let get_rule_response_body: serde_json::Value = get_rule_response.json().await.unwrap();
 
     match get_rule_response_body.get("data") {
         Some(rule_list) => {
@@ -54,40 +57,33 @@ fn main() {
             if has_rule {
                 println!("has rule");
             } else {
-                add_rule(&client);
+                add_rule(&client).await;
             }
         },
         None => {
-            add_rule(&client);
+            add_rule(&client).await;
         },
     }
 
-    let (tweet_tx, tweet_rx) = mpsc::channel();
+    let mut tweet_stream_response = client
+        .get("https://api.twitter.com/2/tweets/search/stream")
+        .header(header::AUTHORIZATION, &format!("Bearer {}", app_access_token))
+        .send()
+        .await
+        .unwrap();
 
-    thread::spawn(move || {
-        let tweet_stream_response = client
-            .get("https://api.twitter.com/2/tweets/search/stream")
-            .header(header::AUTHORIZATION, &format!("Bearer {}", app_access_token))
-            .send()
-            .unwrap();
-
-        let tweet_stream_reader = BufReader::new(tweet_stream_response);
-        for tweet_object_result in tweet_stream_reader.lines() {
-            let tweet_object_string = tweet_object_result.unwrap();
-            if tweet_object_string == "" {
-                continue;
-            }
-            let tweet_object: Tweet = serde_json::from_str(&tweet_object_string).unwrap();
-            tweet_tx.send(tweet_object.data.text).unwrap();
+    while let Some(tweet_object_chunk) = tweet_stream_response.chunk().await.unwrap() {
+        let tweet_object_string = str::from_utf8(&tweet_object_chunk).unwrap().trim();
+        if tweet_object_string == "" {
+            continue;
         }
-    });
-
-    for tweet_text in tweet_rx {
+        let tweet_object: Tweet = serde_json::from_str(&tweet_object_string).unwrap();
+        let tweet_text = tweet_object.data.text;
         handle_tweet(&tweet_text);
     }
 }
 
-fn add_rule(client: &Client) {
+async fn add_rule(client: &Client) {
     println!("no rule");
 
     let app_access_token = env::var("APP_ACCESS_TOKEN").unwrap();
@@ -104,8 +100,9 @@ fn add_rule(client: &Client) {
         .header(header::AUTHORIZATION, &format!("Bearer {}", app_access_token))
         .json(&add_rule_request_body)
         .send()
+        .await
         .unwrap();
-    let add_rule_response_body: serde_json::Value = add_rule_response.json().unwrap();
+    let add_rule_response_body: serde_json::Value = add_rule_response.json().await.unwrap();
 
     let added_rule_count = add_rule_response_body["meta"]["summary"]["created"].as_i64().unwrap();
     assert_eq!(added_rule_count, 1);
