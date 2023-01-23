@@ -79,7 +79,9 @@ async fn main() {
         }
         let tweet_object: Tweet = serde_json::from_str(&tweet_object_string).unwrap();
         let tweet_text = tweet_object.data.text;
-        handle_tweet(&tweet_text);
+        if let Some(discord_message) = tweet_to_discord_message(&tweet_text) {
+            send_to_discord(&client, &discord_message).await;
+        }
     }
 }
 
@@ -111,24 +113,54 @@ async fn add_rule(client: &Client) {
     println!("rule added(id = {})", added_rule_id);
 }
 
-fn handle_tweet(tweet_text: &str) {
+fn tweet_to_discord_message(tweet_text: &str) -> Option<String> {
     let event_ended_rule = Regex::new(r"^(?P<month>\d{1,2})月(?P<date>\d{1,2})日（(?P<day>.)）.*\n.*\nアフターライブを開催").unwrap();
-    event_ended_rule.captures(tweet_text).map(|capture| {
-        println!("{}월 {}일 ({}) 이벤트 종료", &capture["month"], &capture["date"], day_kanji_to_hangul(&capture["day"]));  // TODO: store in database & notice on the day
-    });
+    if let Some(event_ended_message) = event_ended_rule.captures(tweet_text).map(|capture| {
+        format!("{}월 {}일 ({}) 이벤트 종료", &capture["month"], &capture["date"], day_kanji_to_hangul(&capture["day"]))
+    }) {
+        return Some(event_ended_message);
+    }
 
     let event_ended_rule = Regex::new(r"^本日.*\n(?P<event_name>.*)\nアフターライブを開催").unwrap();
-    event_ended_rule.captures(tweet_text).map(|capture| {
-        println!("`{}` 이벤트가 종료되었습니다.\n애프터 라이브를 시청하세요.\n이벤트 스토리를 다 봤는지 확인하세요.", &capture["event_name"]);
-    });
+    if let Some(event_ended_message) = event_ended_rule.captures(tweet_text).map(|capture| {
+        format!("`{}` 이벤트가 종료되었습니다.\n애프터 라이브를 시청하세요.\n이벤트 스토리를 다 봤는지 확인하세요.", &capture["event_name"])
+    }) {
+        return Some(event_ended_message);
+    }
 
     let wondershow_added_rule = Regex::new(r"^(?P<month>\d{1,2})月(?P<date>\d{1,2})日（(?P<day>.)）(?P<hour>\d{1,2})時より\n『ワンダショちゃんねる #(?P<episode_number>\d+)』の生配信が決定！").unwrap();
-    wondershow_added_rule.captures(tweet_text).map(|capture| {
-        println!("{}월 {}일 ({}) {}시부터 제{}회 원더쇼 채널이 방영될 예정입니다.", &capture["month"], &capture["date"], day_kanji_to_hangul(&capture["day"]), &capture["hour"], &capture["episode_number"]);
-    });
+    if let Some(wondershow_added_message) = wondershow_added_rule.captures(tweet_text).map(|capture| {
+        format!("{}월 {}일 ({}) {}시부터 제{}회 원더쇼 채널이 방영될 예정입니다.", &capture["month"], &capture["date"], day_kanji_to_hangul(&capture["day"]), &capture["hour"], &capture["episode_number"])
+    }) {
+        return Some(wondershow_added_message);
+    }
 
     let wondershow_starting_rule = Regex::new(r"^このあと(?P<hour>\d{1,2})時より『ワンダショちゃんねる #(?P<episode_number>\d+)』を生配信").unwrap();
-    wondershow_starting_rule.captures(tweet_text).map(|capture| {
-        println!("잠시 후 {}시부터 제{}회 원더쇼 채널이 방영될 예정입니다.", &capture["hour"], &capture["episode_number"]);
+    if let Some(wondershow_starting_message) = wondershow_starting_rule.captures(tweet_text).map(|capture| {
+        format!("잠시 후 {}시부터 제{}회 원더쇼 채널이 방영될 예정입니다.", &capture["hour"], &capture["episode_number"])
+    }) {
+        return Some(wondershow_starting_message);
+    }
+
+    return None;
+}
+
+async fn send_to_discord(client: &Client, message: &str) {
+    let discord_api_endpoint = env::var("DISCORD_API_ENDPOINT").unwrap();
+    let discord_username = env::var("DISCORD_USERNAME").unwrap();
+    let discord_profile_url = env::var("DISCORD_PROFILE_URL").unwrap();
+
+    let body = serde_json::json!({
+        "username": discord_username,
+        "avatar_url": discord_profile_url,
+        "content": message
     });
+
+    let temp_response = client
+        .post(discord_api_endpoint)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    print!("{:?}", temp_response);
 }
