@@ -43,7 +43,6 @@ async fn main() -> Result<(), Error> {
     dotenv().ok();
 
     let client = Client::new();
-    let app_access_token = env::var("APP_ACCESS_TOKEN")?;
 
     let path = "./sqlite.db3";
     let db_connection = Connection::open(path)?;
@@ -55,6 +54,20 @@ async fn main() -> Result<(), Error> {
         );",
         (),
     )?;
+
+    tokio::spawn(async move {
+        twitter_stream(client, db_connection).await
+    }).await;
+
+    Ok(())
+}
+
+fn get_tokyo_datetime() -> NaiveDateTime {
+    return Utc::now().naive_utc() + Duration::hours(9);
+}
+
+async fn twitter_stream(client: Client, db_connection: Connection) -> Result<(), Error> {
+    let app_access_token = env::var("APP_ACCESS_TOKEN")?;
 
     let get_rule_response = client
         .get("https://api.twitter.com/2/tweets/search/stream/rules")
@@ -100,10 +113,6 @@ async fn main() -> Result<(), Error> {
     }
 
     Ok(())
-}
-
-fn get_tokyo_datetime() -> NaiveDateTime {
-    return Utc::now().naive_utc() + Duration::hours(9);
 }
 
 async fn add_rule(client: &Client) -> Result<(), Error> {

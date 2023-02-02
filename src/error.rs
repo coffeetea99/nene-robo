@@ -5,6 +5,11 @@ pub enum Error {
         #[from]
         std::io::Error,
     ),
+    #[error("Task join error: {0}")]
+    Join(
+        #[from]
+        tokio::task::JoinError,
+    ),
     #[error("HTTP error: {0}")]
     Http(
         #[from]
