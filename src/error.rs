@@ -20,4 +20,9 @@ pub enum Error {
         #[from]
         serde_json::Error,
     ),
+    #[error("Database error: {0}")]
+    Db(
+        #[from]
+        rusqlite::Error,
+    ),
 }

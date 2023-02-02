@@ -7,6 +7,8 @@ use reqwest::{
     header,
 };
 use regex::Regex;
+use rusqlite::{Connection, Result};
+use chrono::{Utc, Duration, NaiveDateTime, Datelike};
 
 mod error;
 use error::Error;
@@ -42,6 +44,17 @@ async fn main() -> Result<(), Error> {
 
     let client = Client::new();
     let app_access_token = env::var("APP_ACCESS_TOKEN")?;
+
+    let path = "./sqlite.db3";
+    let db_connection = Connection::open(path)?;
+    db_connection.execute(
+        "CREATE TABLE if NOT EXISTS event (
+            id          INTEGER PRIMARY KEY,
+            name        TEXT NOT NULL,
+            end_date    INTEGER
+        );",
+        (),
+    )?;
 
     let get_rule_response = client
         .get("https://api.twitter.com/2/tweets/search/stream/rules")
@@ -80,12 +93,17 @@ async fn main() -> Result<(), Error> {
         }
         let tweet_object: Tweet = serde_json::from_str(&tweet_object_string)?;
         let tweet_text = tweet_object.data.text;
+        handle_database(&db_connection, &tweet_text)?;
         if let Some(discord_message) = tweet_to_discord_message(&tweet_text) {
             send_to_discord(&client, &discord_message).await?;
         }
     }
 
     Ok(())
+}
+
+fn get_tokyo_datetime() -> NaiveDateTime {
+    return Utc::now().naive_utc() + Duration::hours(9);
 }
 
 async fn add_rule(client: &Client) -> Result<(), Error> {
@@ -117,14 +135,30 @@ async fn add_rule(client: &Client) -> Result<(), Error> {
     Ok(())
 }
 
-fn tweet_to_discord_message(tweet_text: &str) -> Option<String> {
-    let event_ended_rule = Regex::new(r"^(?P<month>\d{1,2})月(?P<date>\d{1,2})日（(?P<day>.)）.*\n.*\nアフターライブを開催").ok()?;
-    if let Some(event_ended_message) = event_ended_rule.captures(tweet_text).map(|capture| {
-        format!("{}월 {}일 ({}) 이벤트 종료", &capture["month"], &capture["date"], day_kanji_to_hangul(&capture["day"]))
-    }) {
-        return Some(event_ended_message);
+fn handle_database(db_connection: &Connection, tweet_text: &str) -> Result<(), Error> {
+    let event_ends_rule = Regex::new(r"^(?P<month>\d{1,2})月(?P<date>\d{1,2})日.*\n(?P<event_name>.*)\nアフターライブを開催").unwrap();
+    if let Some(capture) = event_ends_rule.captures(tweet_text) {
+        let tokyo_datetime = get_tokyo_datetime();
+
+        let mut year = tokyo_datetime.year() as u32;
+        let month: u32 = capture["month"].parse().unwrap();
+        let day: u32 = capture["date"].parse().unwrap();
+
+        if tokyo_datetime.month() == 12 && month == 1 {
+            year += 1;
+        }
+
+        let date = year * 10000 + month * 100 + day;
+        db_connection.execute(
+            "INSERT INTO event (name, end_date) VALUES (?1, ?2);",
+            (&capture["event_name"], date),
+        )?;
     }
 
+    Ok(())
+}
+
+fn tweet_to_discord_message(tweet_text: &str) -> Option<String> {
     let event_ended_rule = Regex::new(r"^本日.*\n(?P<event_name>.*)\nアフターライブを開催").ok()?;
     if let Some(event_ended_message) = event_ended_rule.captures(tweet_text).map(|capture| {
         format!("`{}` 이벤트가 종료되었습니다.\n애프터 라이브를 시청하세요.\n이벤트 스토리를 다 봤는지 확인하세요.", &capture["event_name"])
