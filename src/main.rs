@@ -25,6 +25,13 @@ struct Tweet {
     data: TweetData,
 }
 
+#[derive(Debug)]
+struct Event {
+    id: u32,
+    name: String,
+    end_date: i32, // ex: 20221229
+}
+
 fn day_kanji_to_hangul(kanji: &str) -> &'static str {
     match kanji {
         "月" => "월",
@@ -43,9 +50,12 @@ async fn main() -> Result<(), Error> {
     dotenv().ok();
 
     let client = Client::new();
+    let cron_client = client.clone();
 
     let path = "./sqlite.db3";
     let db_connection = Connection::open(path)?;
+    let cron_db_connection = Connection::open(path)?;
+
     db_connection.execute(
         "CREATE TABLE if NOT EXISTS event (
             id          INTEGER PRIMARY KEY,
@@ -56,6 +66,9 @@ async fn main() -> Result<(), Error> {
     )?;
 
     tokio::spawn(async move {
+        cron(cron_client, cron_db_connection).await
+    });
+    tokio::spawn(async move {
         twitter_stream(client, db_connection).await
     }).await;
 
@@ -64,6 +77,38 @@ async fn main() -> Result<(), Error> {
 
 fn get_tokyo_datetime() -> NaiveDateTime {
     return Utc::now().naive_utc() + Duration::hours(9);
+}
+
+async fn cron(client: Client, db_connection: Connection) -> Result<(), Error> {
+    let now = chrono::Local::now();
+    let mut start = now.date_naive().and_hms_opt(0, 0, 0).unwrap().signed_duration_since(now.naive_local());
+    if start < chrono::Duration::seconds(0) {
+        start = start.checked_add(&chrono::Duration::days(1)).unwrap();
+    }
+
+    let period = std::time::Duration::from_secs(24 * 60 * 60);
+    let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + start.to_std().unwrap(), period);
+
+    loop {
+        interval.tick().await;
+        let tokyo_datetime = get_tokyo_datetime();
+        let year = tokyo_datetime.year() as u32;
+        let month = tokyo_datetime.month();
+        let day = tokyo_datetime.day();
+        let date = year * 10000 + month * 100 + day;
+
+        let mut statement = db_connection.prepare("SELECT id, name, end_date FROM event WHERE end_date = :end_date;")?;
+        let event_iter = statement.query_map(&[(":end_date", date.to_string().as_str())], |row| {
+            Ok(Event {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                end_date: row.get(2)?,
+            })
+        })?;
+        for event in event_iter {
+            println!("Handle this event: {:?}", event.unwrap());
+        }
+    }
 }
 
 async fn twitter_stream(client: Client, db_connection: Connection) -> Result<(), Error> {
