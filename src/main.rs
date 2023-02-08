@@ -32,6 +32,13 @@ struct Event {
     end_date: i32, // ex: 20221229
 }
 
+#[derive(Debug)]
+struct Birthday {
+    date: i32, // ex: 831
+    character_name: String,
+    live_type: String, // "생일" | "애니버서리"
+}
+
 fn day_kanji_to_hangul(kanji: &str) -> &'static str {
     match kanji {
         "月" => "월",
@@ -56,14 +63,7 @@ async fn main() -> Result<(), Error> {
     let db_connection = Connection::open(path)?;
     let cron_db_connection = Connection::open(path)?;
 
-    db_connection.execute(
-        "CREATE TABLE if NOT EXISTS event (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            name        TEXT NOT NULL,
-            end_date    INTEGER
-        );",
-        (),
-    )?;
+    init_database(&db_connection);
 
     tokio::spawn(async move {
         cron(cron_client, cron_db_connection).await
@@ -261,6 +261,59 @@ async fn send_to_discord(client: &Client, message: &str) -> Result<(), Error> {
         .send()
         .await?;
     print!("{:?}", temp_response);
+
+    Ok(())
+}
+
+fn init_database(db_connection: &Connection) -> Result<(), Error> {
+    db_connection.execute(
+        "CREATE TABLE if NOT EXISTS event (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            end_date    INTEGER
+        );",
+        (),
+    )?;
+
+    db_connection.execute("DROP TABLE IF EXISTS birthday", ())?;
+    db_connection.execute(
+        "CREATE TABLE birthday (
+            character_name  TEXT NOT NULL,
+            date            INTEGER NOT NULL,
+            live_type       TEXT NOT NULL
+        );",
+        (),
+    )?;
+    db_connection.execute("CREATE INDEX birthday_date ON birthday (date);", ())?;
+    db_connection.execute("
+        INSERT INTO birthday (character_name, date, live_type) VALUES
+        ('히노모리 시호', 108, '생일'),
+        ('아사히나 마후유', 127, '생일'),
+        ('메구리네 루카', 130, '애니버서리'),
+        ('요이사키 카나데', 210, '생일'),
+        ('KAITO', 217, '애니버서리'),
+        ('아즈사와 코하네', 302, '생일'),
+        ('모모이 아이리', 319, '생일'),
+        ('하나사토 미노리', 414, '생일'),
+        ('시노노메 에나', 430, '생일'),
+        ('텐마 사키', 509, '생일'),
+        ('텐마 츠카사', 517, '생일'),
+        ('아오야기 토우야', 525, '생일'),
+        ('카미시로 루이', 624, '생일'),
+        ('쿠사나기 네네', 720, '생일'),
+        ('시라이시 안', 726, '생일'),
+        ('호시노 이치카', 811, '생일'),
+        ('아키야마 미즈키', 827, '생일'),
+        ('하츠네 미쿠', 831, '애니버서리'),
+        ('오오토리 에무', 909, '생일'),
+        ('키리타니 하루카', 1005, '생일'),
+        ('모치즈키 호나미', 1027, '생일'),
+        ('MEIKO', 1105, '애니버서리'),
+        ('시노노메 아키토', 1112, '생일'),
+        ('히노모리 시즈쿠', 1206, '생일'),
+        ('카가미네 린', 1227, '애니버서리'),
+        ('카가미네 렌', 1227, '애니버서리');
+    ", ())?;
 
     Ok(())
 }
