@@ -58,7 +58,7 @@ async fn main() -> Result<(), Error> {
 
     db_connection.execute(
         "CREATE TABLE if NOT EXISTS event (
-            id          INTEGER PRIMARY KEY,
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
             name        TEXT NOT NULL,
             end_date    INTEGER
         );",
@@ -91,22 +91,29 @@ async fn cron(client: Client, db_connection: Connection) -> Result<(), Error> {
 
     loop {
         interval.tick().await;
+
         let tokyo_datetime = get_tokyo_datetime();
         let year = tokyo_datetime.year() as u32;
         let month = tokyo_datetime.month();
         let day = tokyo_datetime.day();
         let date = year * 10000 + month * 100 + day;
 
-        let mut statement = db_connection.prepare("SELECT id, name, end_date FROM event WHERE end_date = :end_date;")?;
-        let event_iter = statement.query_map(&[(":end_date", date.to_string().as_str())], |row| {
-            Ok(Event {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                end_date: row.get(2)?,
-            })
-        })?;
-        for event in event_iter {
-            println!("Handle this event: {:?}", event.unwrap());
+        let event_ends_message_vec: Vec<_> = {
+            let mut statement = db_connection.prepare("SELECT id, name, end_date FROM event WHERE end_date = :end_date;")?;
+            let event_ends_message_vec = statement.query_map(&[(":end_date", date.to_string().as_str())], |row| {
+                Ok(Event {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    end_date: row.get(2)?,
+                })
+            })?
+            .map(|event| format!("오늘 21시에 `{}` 이벤트가 종료됩니다.", event.unwrap().name))
+            .collect();
+            event_ends_message_vec
+        };
+
+        for event_ends_message in event_ends_message_vec {
+            send_to_discord(&client, &event_ends_message).await?;
         }
     }
 }
