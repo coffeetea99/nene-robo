@@ -96,9 +96,9 @@ async fn cron(client: Client, db_connection: Connection) -> Result<(), Error> {
         let year = tokyo_datetime.year() as u32;
         let month = tokyo_datetime.month();
         let day = tokyo_datetime.day();
-        let date = year * 10000 + month * 100 + day;
 
         let event_ends_message_vec: Vec<_> = {
+            let date = year * 10000 + month * 100 + day;
             let mut statement = db_connection.prepare("SELECT id, name, end_date FROM event WHERE end_date = :end_date;")?;
             let event_ends_message_vec = statement.query_map(&[(":end_date", date.to_string().as_str())], |row| {
                 Ok(Event {
@@ -111,9 +111,29 @@ async fn cron(client: Client, db_connection: Connection) -> Result<(), Error> {
             .collect();
             event_ends_message_vec
         };
-
         for event_ends_message in event_ends_message_vec {
             send_to_discord(&client, &event_ends_message).await?;
+        }
+
+        let birthday_message_vec: Vec<_> = {
+            let date = month * 100 + day;
+            let mut statement = db_connection.prepare("SELECT character_name, date, live_type FROM birthday WHERE date = :date;")?;
+            let birthday_message_vec = statement.query_map(&[(":date", date.to_string().as_str())], |row| {
+                Ok(Birthday {
+                    character_name: row.get(0)?,
+                    date: row.get(1)?,
+                    live_type: row.get(2)?,
+                })
+            })?
+            .map(|event| {
+                let event = event.unwrap();
+                format!("오늘은 {}의 생일입니다.\n{} 라이브를 시청하세요.", event.character_name, event.live_type)
+            })
+            .collect();
+            birthday_message_vec
+        };
+        for birthday_message in birthday_message_vec {
+            send_to_discord(&client, &birthday_message).await?;
         }
     }
 }
