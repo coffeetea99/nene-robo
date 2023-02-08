@@ -34,22 +34,9 @@ struct Event {
 
 #[derive(Debug)]
 struct Birthday {
-    date: i32, // ex: 831
     character_name: String,
+    date: i32, // ex: 831
     live_type: String, // "생일" | "애니버서리"
-}
-
-fn day_kanji_to_hangul(kanji: &str) -> &'static str {
-    match kanji {
-        "月" => "월",
-        "火" => "화",
-        "水" => "수",
-        "木" => "목",
-        "金" => "금",
-        "土" => "토",
-        "日" => "일",
-        _ => "",
-    }
 }
 
 #[tokio::main]
@@ -57,85 +44,23 @@ async fn main() -> Result<(), Error> {
     dotenv().ok();
 
     let client = Client::new();
+    let twitter_stream_client = client.clone();
     let cron_client = client.clone();
 
-    let path = "./sqlite.db3";
-    let db_connection = Connection::open(path)?;
-    let cron_db_connection = Connection::open(path)?;
+    let db_path = "./sqlite.db3";
+    let twitter_stream_db_connection = Connection::open(db_path)?;
+    let cron_db_connection = Connection::open(db_path)?;
 
-    init_database(&db_connection);
+    init_database(&twitter_stream_db_connection);
 
     tokio::spawn(async move {
-        cron(cron_client, cron_db_connection).await
+        twitter_stream(twitter_stream_client, twitter_stream_db_connection).await
     });
     tokio::spawn(async move {
-        twitter_stream(client, db_connection).await
+        cron(cron_client, cron_db_connection).await
     }).await;
 
     Ok(())
-}
-
-fn get_tokyo_datetime() -> NaiveDateTime {
-    return Utc::now().naive_utc() + Duration::hours(9);
-}
-
-async fn cron(client: Client, db_connection: Connection) -> Result<(), Error> {
-    let now = chrono::Local::now();
-    let mut start = now.date_naive().and_hms_opt(0, 0, 0).unwrap().signed_duration_since(now.naive_local());
-    if start < chrono::Duration::seconds(0) {
-        start = start.checked_add(&chrono::Duration::days(1)).unwrap();
-    }
-
-    let period = std::time::Duration::from_secs(24 * 60 * 60);
-    let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + start.to_std().unwrap(), period);
-
-    loop {
-        interval.tick().await;
-
-        let tokyo_datetime = get_tokyo_datetime();
-        let year = tokyo_datetime.year() as u32;
-        let month = tokyo_datetime.month();
-        let day = tokyo_datetime.day();
-
-        let event_ends_message_vec: Vec<_> = {
-            let date = year * 10000 + month * 100 + day;
-            let mut statement = db_connection.prepare("SELECT id, name, end_date FROM event WHERE end_date = :end_date;")?;
-            let event_ends_message_vec = statement.query_map(&[(":end_date", date.to_string().as_str())], |row| {
-                Ok(Event {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    end_date: row.get(2)?,
-                })
-            })?
-            .map(|event| format!("오늘 21시에 `{}` 이벤트가 종료됩니다.", event.unwrap().name))
-            .collect();
-            event_ends_message_vec
-        };
-        for event_ends_message in event_ends_message_vec {
-            send_to_discord(&client, &event_ends_message).await?;
-        }
-
-        let birthday_message_vec: Vec<_> = {
-            let date = month * 100 + day;
-            let mut statement = db_connection.prepare("SELECT character_name, date, live_type FROM birthday WHERE date = :date;")?;
-            let birthday_message_vec = statement.query_map(&[(":date", date.to_string().as_str())], |row| {
-                Ok(Birthday {
-                    character_name: row.get(0)?,
-                    date: row.get(1)?,
-                    live_type: row.get(2)?,
-                })
-            })?
-            .map(|event| {
-                let event = event.unwrap();
-                format!("오늘은 {}의 생일입니다.\n{} 라이브를 시청하세요.", event.character_name, event.live_type)
-            })
-            .collect();
-            birthday_message_vec
-        };
-        for birthday_message in birthday_message_vec {
-            send_to_discord(&client, &birthday_message).await?;
-        }
-    }
 }
 
 async fn twitter_stream(client: Client, db_connection: Connection) -> Result<(), Error> {
@@ -264,6 +189,67 @@ fn tweet_to_discord_message(tweet_text: &str) -> Option<String> {
     return None;
 }
 
+async fn cron(client: Client, db_connection: Connection) -> Result<(), Error> {
+    let now = chrono::Local::now();
+    let mut start = now.date_naive().and_hms_opt(0, 0, 0).unwrap().signed_duration_since(now.naive_local());
+    if start < chrono::Duration::seconds(0) {
+        start = start.checked_add(&chrono::Duration::days(1)).unwrap();
+    }
+
+    let period = std::time::Duration::from_secs(24 * 60 * 60);
+    let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + start.to_std().unwrap(), period);
+
+    loop {
+        interval.tick().await;
+
+        let tokyo_datetime = get_tokyo_datetime();
+        let year = tokyo_datetime.year() as u32;
+        let month = tokyo_datetime.month();
+        let day = tokyo_datetime.day();
+
+        let event_ends_message_vec: Vec<_> = {
+            let date = year * 10000 + month * 100 + day;
+            let mut statement = db_connection.prepare("SELECT id, name, end_date FROM event WHERE end_date = :end_date;")?;
+            let event_ends_message_vec = statement.query_map(&[(":end_date", date.to_string().as_str())], |row| {
+                Ok(Event {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    end_date: row.get(2)?,
+                })
+            })?
+            .map(|event| format!("오늘 21시에 `{}` 이벤트가 종료됩니다.", event.unwrap().name))
+            .collect();
+            event_ends_message_vec
+        };
+        for event_ends_message in event_ends_message_vec {
+            send_to_discord(&client, &event_ends_message).await?;
+        }
+
+        let birthday_message_vec: Vec<_> = {
+            let date = month * 100 + day;
+            let mut statement = db_connection.prepare("SELECT character_name, date, live_type FROM birthday WHERE date = :date;")?;
+            let birthday_message_vec = statement.query_map(&[(":date", date.to_string().as_str())], |row| {
+                Ok(Birthday {
+                    character_name: row.get(0)?,
+                    date: row.get(1)?,
+                    live_type: row.get(2)?,
+                })
+            })?
+            .map(|event| {
+                let event = event.unwrap();
+                format!("오늘은 {}의 생일입니다.\n{} 라이브를 시청하세요.", event.character_name, event.live_type)
+            })
+            .collect();
+            birthday_message_vec
+        };
+        for birthday_message in birthday_message_vec {
+            send_to_discord(&client, &birthday_message).await?;
+        }
+    }
+}
+
+// common functions
+
 async fn send_to_discord(client: &Client, message: &str) -> Result<(), Error> {
     let discord_api_endpoint = env::var("DISCORD_API_ENDPOINT")?;
     let discord_username = env::var("DISCORD_USERNAME")?;
@@ -284,6 +270,25 @@ async fn send_to_discord(client: &Client, message: &str) -> Result<(), Error> {
 
     Ok(())
 }
+
+fn get_tokyo_datetime() -> NaiveDateTime {
+    return Utc::now().naive_utc() + Duration::hours(9);
+}
+
+fn day_kanji_to_hangul(kanji: &str) -> &'static str {
+    match kanji {
+        "月" => "월",
+        "火" => "화",
+        "水" => "수",
+        "木" => "목",
+        "金" => "금",
+        "土" => "토",
+        "日" => "일",
+        _ => "",
+    }
+}
+
+// database initialization
 
 fn init_database(db_connection: &Connection) -> Result<(), Error> {
     db_connection.execute(
